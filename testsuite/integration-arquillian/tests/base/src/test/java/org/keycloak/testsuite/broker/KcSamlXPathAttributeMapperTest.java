@@ -13,6 +13,7 @@ import org.keycloak.protocol.saml.mappers.HardcodedAttributeMapper;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.IdentityProviderMapperRepresentation;
 import org.keycloak.representations.idm.ProtocolMapperRepresentation;
+import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.saml.common.util.DocumentUtil;
 import org.keycloak.saml.processing.api.saml.v2.request.SAML2Request;
 import org.keycloak.testsuite.saml.AbstractSamlTest;
@@ -41,42 +42,42 @@ public class KcSamlXPathAttributeMapperTest extends AbstractInitializedBaseBroke
     public void beforeBrokerTest() {
         super.beforeBrokerTest();
 
-        {
-            RealmResource realm = adminClient.realm(bc.providerRealmName());
-            ProtocolMapperRepresentation protocolMapper = new ProtocolMapperRepresentation();
-            protocolMapper.setProtocol("saml");
-            protocolMapper.setName("Hardcoded XML");
-            protocolMapper.setProtocolMapper(HardcodedAttributeMapper.PROVIDER_ID);
-            protocolMapper.getConfig().put(HardcodedAttributeMapper.ATTRIBUTE_VALUE, "<Street>Zillestraße</Street><HouseNumber>17</HouseNumber><ZipCode>10585</ZipCode><City>Berlin</City><Country>DE</Country>");
-            protocolMapper.getConfig().put(AttributeStatementHelper.FRIENDLY_NAME, "xml-friendlyName");
-            protocolMapper.getConfig().put(AttributeStatementHelper.SAML_ATTRIBUTE_NAME, "xml-name");
-            protocolMapper.getConfig().put(AttributeStatementHelper.SAML_ATTRIBUTE_NAMEFORMAT, AttributeStatementHelper.BASIC);
+        RealmResource realm = adminClient.realm(bc.providerRealmName());
+        ProtocolMapperRepresentation protocolMapper = new ProtocolMapperRepresentation();
+        protocolMapper.setProtocol("saml");
+        protocolMapper.setName("Hardcoded XML");
+        protocolMapper.setProtocolMapper(HardcodedAttributeMapper.PROVIDER_ID);
+        protocolMapper.getConfig().put(HardcodedAttributeMapper.ATTRIBUTE_VALUE,
+                "<firstName>Theo</firstName><lastName>Tester</lastName><email>test@example.org</email><xml-output>Some random text</xml-output>"
+        );
+        protocolMapper.getConfig().put(AttributeStatementHelper.FRIENDLY_NAME, "xml-friendlyName");
+        protocolMapper.getConfig().put(AttributeStatementHelper.SAML_ATTRIBUTE_NAME, "xml-name");
+        protocolMapper.getConfig().put(AttributeStatementHelper.SAML_ATTRIBUTE_NAMEFORMAT, AttributeStatementHelper.BASIC);
 
-            ClientRepresentation clientRepresentation = realm.clients().findByClientId(bc.getIDPClientIdInProviderRealm())
-                    .get(0);
-            realm.clients().get(clientRepresentation.getId()).getProtocolMappers().createMapper(protocolMapper).close();
-        }
+        ClientRepresentation clientRepresentation = realm.clients().findByClientId(bc.getIDPClientIdInProviderRealm())
+                .get(0);
+        realm.clients().get(clientRepresentation.getId()).getProtocolMappers().createMapper(protocolMapper).close();
 
-        {
-            RealmResource realm = adminClient.realm(bc.consumerRealmName());
+        addXpathMapper("firstName");
+        addXpathMapper("lastName");
+        addXpathMapper("email");
+        addXpathMapper("xml-output");
+    }
 
-            IdentityProviderMapperRepresentation xpathMapper = new IdentityProviderMapperRepresentation();
-            xpathMapper.setName("xpath-mapper-email");
+    private void addXpathMapper(String field) {
+        IdentityProviderMapperRepresentation xpathMapper = new IdentityProviderMapperRepresentation();
+        xpathMapper.setName("xpath-mapper-" + field);
+        xpathMapper.setIdentityProviderMapper(XPathAttributeMapper.PROVIDER_ID);
+        xpathMapper.setIdentityProviderAlias(IDP_SAML_ALIAS);
+        xpathMapper.setConfig(ImmutableMap.<String, String>builder()
+                .put(IdentityProviderMapperModel.SYNC_MODE, "INHERIT")
+                .put(XPathAttributeMapper.ATTRIBUTE_FRIENDLY_NAME, "xml-friendlyName")
+                .put(XPathAttributeMapper.ATTRIBUTE_XPATH, "//*[local-name()='" + field + "']")
+                .put(XPathAttributeMapper.USER_ATTRIBUTE, field)
+                .build());
 
-            xpathMapper.setIdentityProviderMapper(UserAttributeMapper.PROVIDER_ID);
-            xpathMapper.setName("xpath-mapper-email");
-            xpathMapper.setIdentityProviderMapper("saml-xpath-attribute-idp-mapper");
-            xpathMapper.setIdentityProviderAlias(IDP_SAML_ALIAS);
-            xpathMapper.setConfig(ImmutableMap.<String, String>builder()
-                    .put(IdentityProviderMapperModel.SYNC_MODE, "INHERIT")
-                    .put(XPathAttributeMapper.ATTRIBUTE_FRIENDLY_NAME, "xml-friendlyName")
-                    .put(XPathAttributeMapper.ATTRIBUTE_XPATH, "//*[local-name()='Street']")
-                    .put(XPathAttributeMapper.USER_ATTRIBUTE, "xml-output")
-                    .build());
-
-            realm.identityProviders().get(IDP_SAML_ALIAS)
-                    .addMapper(xpathMapper).close();
-        }
+        identityProviderResource
+                .addMapper(xpathMapper).close();
     }
 
 
@@ -109,14 +110,18 @@ public class KcSamlXPathAttributeMapperTest extends AbstractInitializedBaseBroke
                 })
                 .build()
 
-                .updateProfile().firstName("a").lastName("b").email(bc.getUserEmail()).username(bc.getUserLogin()).build()
+                .followOneRedirect()
                 .followOneRedirect()
 
                 .getSamlResponse(SamlClient.Binding.POST);
 
         RealmResource realm = adminClient.realm(bc.consumerRealmName());
 
-        Assert.assertThat(realm.users().search(bc.getUserLogin()).get(0).getAttributes().get("xml-output"), equalTo(Collections.singletonList("Zillestraße")));
+        UserRepresentation user = realm.users().search(bc.getUserLogin()).get(0);
+        Assert.assertThat(user.getFirstName(), equalTo("Theo"));
+        Assert.assertThat(user.getLastName(), equalTo("Tester"));
+        Assert.assertThat(user.getEmail(), equalTo("test@example.org"));
+        Assert.assertThat(user.getAttributes().get("xml-output"), equalTo(Collections.singletonList("Some random text")));
     }
 
 }
