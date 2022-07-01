@@ -9,6 +9,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.Test;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
@@ -80,27 +81,26 @@ public class XPathAttributeMapperTest {
 
     @Test
     public void testUserAttributeNames() {
-        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, "firstName").getFirstName(), is(EXPECTED_RESULT));
-        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, "lastName").getLastName(), is(EXPECTED_RESULT));
-        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, "userAttribute").getUserAttribute("userAttribute"), is(EXPECTED_RESULT));
+        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, "firstName"), is(EXPECTED_RESULT));
+        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, "lastName"), is(EXPECTED_RESULT));
+        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, "userAttribute"), is(EXPECTED_RESULT));
     }
 
     @Test
     public void testAttributeNames() {
-        assertNull(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, USER_ATTRIBUTE_NAME_FOR_TEST, ATTRIBUTE_NAME + "x").getEmail());
-        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, USER_ATTRIBUTE_NAME_FOR_TEST, null).getEmail(), is(EXPECTED_RESULT));
+        assertNull(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, USER_ATTRIBUTE_NAME_FOR_TEST, ATTRIBUTE_NAME + "x"));
+        assertThat(testMapping(XML_FRAGMENT, XPATH_FOR_TEST, USER_ATTRIBUTE_NAME_FOR_TEST, null), is(EXPECTED_RESULT));
     }
 
     private String testMapping(String attributeValue, String xpath) {
-        BrokeredIdentityContext context = testMapping(attributeValue, xpath, USER_ATTRIBUTE_NAME_FOR_TEST);
-        return context.getEmail();
+        return testMapping(attributeValue, xpath, USER_ATTRIBUTE_NAME_FOR_TEST);
     }
 
-    private BrokeredIdentityContext testMapping(String attributeValue, String xpath, String attribute) {
+    private String testMapping(String attributeValue, String xpath, String attribute) {
         return testMapping(attributeValue, xpath, attribute, ATTRIBUTE_NAME);
     }
 
-    private BrokeredIdentityContext testMapping(String attributeValue, String xpath, String attribute, String attributeNameToSearch) {
+    private String testMapping(String attributeValue, String xpath, String attribute, String attributeNameToSearch) {
         IdentityProviderMapperModel mapperModel = new IdentityProviderMapperModel();
         Map<String, String> config = new HashMap<>();
         mapperModel.setConfig(config);
@@ -125,6 +125,8 @@ public class XPathAttributeMapperTest {
         statement.addAttribute(new AttributeStatementType.ASTChoiceType(longAttributeType));
         context.getContextData().put(SAMLEndpoint.SAML_ASSERTION, assertion);
         new XPathAttributeMapper().preprocessFederatedIdentity(null, null, mapperModel, context);
-        return context;
+
+        Object userAttributes = context.getContextData().get("user.attributes." + attribute);
+        return userAttributes == null ? null : ((List<?>) userAttributes).get(0).toString();
     }
 }

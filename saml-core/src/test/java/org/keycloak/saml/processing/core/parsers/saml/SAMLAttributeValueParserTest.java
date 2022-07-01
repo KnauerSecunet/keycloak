@@ -76,6 +76,22 @@ public class SAMLAttributeValueParserTest {
                 actualAttributeValue);
     }
 
+    @Test
+    public void parsesAttributeValueUserTypeWithAttributeAndInnerNamespace() throws Exception {
+        String xmlDocPayload = "<%1$sAddress myCustomType3:restriction=\"one-way\"%3$s><%1$sStreet>Zillestraße</%1$sStreet><%2$sHouseNumber%4$s>17"
+                + "</%2$sHouseNumber><myCustomType4:ZipCode xmlns:myCustomType4=\"http://my.custom4.de/schema/saml/extensions\">10585"
+                + "</myCustomType4:ZipCode><City xmlns=\"http://my.custom4.de/schema/saml/extensions\">Berlin</City></%1$sAddress>";
+        String namespace1 = "xmlns:myCustomType1=\"http://my.custom1.de/schema/saml/extensions\"";
+        String namespace2 = "xmlns:myCustomType2=\"http://my.custom2.de/schema/saml/extensions\"";
+        String namespace3 = "xmlns:myCustomType3=\"http://my.custom3.de/schema/saml/extensions\"";
+        String namespace4 = "xmlns:myCustomType4=\"http://my.custom4.de/schema/saml/extensions\"";
+        Object actualAttributeValue = parseAttributeValue(
+                namespace1 + " " + namespace2 + " " + namespace3 + " " + namespace4 + " xsi:type=\"myCustomType1:AddressType\"",
+                String.format(xmlDocPayload, "myCustomType1:", "myCustomType2:", "", ""));
+        Assert.assertEquals(String.format(xmlDocPayload, "myCustomType1:", "myCustomType2:", " " + namespace3 + " " + namespace1, " " + namespace2),
+                actualAttributeValue);
+    }
+
     private Object parseAttributeValue(String namespaceAndType, String payload) throws Exception {
         InputStream input = new ByteArrayInputStream(asAttribute(namespaceAndType, payload).getBytes(StandardCharsets.UTF_8));
         XMLEventReader xmlEventReader = AbstractParser.createEventReader(input);

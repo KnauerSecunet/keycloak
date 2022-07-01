@@ -5,6 +5,7 @@ import static org.keycloak.saml.common.constants.JBossSAMLURIConstants.ATTRIBUTE
 import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -12,10 +13,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -30,7 +29,6 @@ import org.keycloak.broker.provider.AbstractIdentityProviderMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.saml.SAMLEndpoint;
 import org.keycloak.broker.saml.SAMLIdentityProviderFactory;
-import org.keycloak.common.util.CollectionUtil;
 import org.keycloak.dom.saml.v2.assertion.AssertionType;
 import org.keycloak.dom.saml.v2.assertion.AttributeStatementType;
 import org.keycloak.dom.saml.v2.assertion.AttributeType;
@@ -60,10 +58,11 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
     public static final String ATTRIBUTE_NAME = "attribute.name";
     public static final String ATTRIBUTE_FRIENDLY_NAME = "attribute.friendly.name";
     public static final String USER_ATTRIBUTE = "user.attribute";
-    private static final String EMAIL = "email";
-    private static final String FIRST_NAME = "firstName";
-    private static final String LAST_NAME = "lastName";
     private static final Set<IdentityProviderSyncMode> IDENTITY_PROVIDER_SYNC_MODES = new HashSet<>(Arrays.asList(IdentityProviderSyncMode.values()));
+
+    private static final Pattern NAMESPACE_PATTERN = Pattern.compile("xmlns:(\\w+)=\"(.+?)\"");
+
+    private static final ThreadLocal<XPathFactory> XPATH_FACTORY = ThreadLocal.withInitial(XPathFactory::newInstance);
 
     static {
         ProviderConfigProperty property;
@@ -90,7 +89,7 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
         property = new ProviderConfigProperty();
         property.setName(USER_ATTRIBUTE);
         property.setLabel("User Attribute Name");
-        property.setHelpText("User attribute name to store XPath value.  Use email, lastName, and firstName to map to those predefined user properties.");
+        property.setHelpText("User attribute name to store XPath value. Use " + UserModel.EMAIL + ", " + UserModel.FIRST_NAME + ", and " + UserModel.LAST_NAME + " for e-mail, first and last name, respectively.");
         property.setType(ProviderConfigProperty.STRING_TYPE);
         configProperties.add(property);
     }
@@ -138,15 +137,7 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
 
         List<String> attributeValuesInContext = findAttributeValuesInContext(attributeName, attributeXPath, context);
         if (!attributeValuesInContext.isEmpty()) {
-            if (attribute.equalsIgnoreCase(EMAIL)) {
-                setIfNotEmpty(context::setEmail, attributeValuesInContext);
-            } else if (attribute.equalsIgnoreCase(FIRST_NAME)) {
-                setIfNotEmpty(context::setFirstName, attributeValuesInContext);
-            } else if (attribute.equalsIgnoreCase(LAST_NAME)) {
-                setIfNotEmpty(context::setLastName, attributeValuesInContext);
-            } else {
-                context.setUserAttribute(attribute, attributeValuesInContext);
-            }
+            context.setUserAttribute(attribute, attributeValuesInContext);
         }
     }
 
@@ -156,18 +147,6 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
             attributeName = mapperModel.getConfig().get(ATTRIBUTE_FRIENDLY_NAME);
         }
         return attributeName;
-    }
-
-    private void setIfNotEmpty(Consumer<String> consumer, List<String> values) {
-        if (values != null && !values.isEmpty()) {
-            consumer.accept(values.get(0));
-        }
-    }
-
-    private void setIfNotEmptyAndDifferent(Consumer<String> consumer, Supplier<String> currentValueSupplier, List<String> values) {
-        if (values != null && !values.isEmpty() && !values.get(0).equals(currentValueSupplier.get())) {
-            consumer.accept(values.get(0));
-        }
     }
 
     private Predicate<AttributeStatementType.ASTChoiceType> elementWith(String attributeName) {
@@ -182,9 +161,9 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
     private static Function<String, Object> applyXPath(String attributeXPath) {
         return xml -> {
             try {
-                LOGGER.trace("Trying to parse: " + xml);
+                LOGGER.tracef("Trying to parse: %s", xml);
 
-                Matcher namespaceMatcher = Pattern.compile("xmlns:(\\w+)=\"(.+?)\"").matcher(xml);
+                Matcher namespaceMatcher = NAMESPACE_PATTERN.matcher(xml);
                 Map<String, String> namespaces = new HashMap<>();
                 Map<String, String> prefixes = new HashMap<>();
                 while (namespaceMatcher.find()) {
@@ -192,7 +171,7 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
                     prefixes.put(namespaceMatcher.group(2), namespaceMatcher.group(1));
                 }
 
-                XPath xPath = XPathFactory.newInstance().newXPath();
+                XPath xPath = XPATH_FACTORY.get().newXPath();
                 xPath.setNamespaceContext(new NamespaceContext() {
                     @Override
                     public String getNamespaceURI(String prefix) {
@@ -237,11 +216,14 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
         AssertionType assertion = (AssertionType) context.getContextData().get(SAMLEndpoint.SAML_ASSERTION);
 
         return assertion.getAttributeStatements().stream()
-                .flatMap(statement -> statement.getAttributes().stream())
+                .map(AttributeStatementType::getAttributes)
+                .flatMap(Collection::stream)
                 .filter(elementWith(attributeName))
-                .flatMap(attributeType -> attributeType.getAttribute().getAttributeValue().stream())
+                .map(AttributeStatementType.ASTChoiceType::getAttribute)
+                .map(AttributeType::getAttributeValue)
+                .flatMap(Collection::stream)
                 .filter(String.class::isInstance)
-                .map(String.class::cast)
+                .map(Object::toString)
                 .map(s -> "<root>" + s + "</root>")
                 .map(applyXPath(attributeXPath))
                 .filter(Objects::nonNull)
@@ -259,25 +241,8 @@ public class XPathAttributeMapper extends AbstractIdentityProviderMapper impleme
         String attributeName = getAttributeNameFromMapperModel(mapperModel);
         String attributeXPath = mapperModel.getConfig().get(ATTRIBUTE_XPATH);
         List<String> attributeValuesInContext = findAttributeValuesInContext(attributeName, attributeXPath, context);
-        if (attribute.equalsIgnoreCase(EMAIL)) {
-            setIfNotEmptyAndDifferent(user::setEmail, user::getEmail, attributeValuesInContext);
-        } else if (attribute.equalsIgnoreCase(FIRST_NAME)) {
-            setIfNotEmptyAndDifferent(user::setFirstName, user::getFirstName, attributeValuesInContext);
-        } else if (attribute.equalsIgnoreCase(LAST_NAME)) {
-            setIfNotEmptyAndDifferent(user::setLastName, user::getLastName, attributeValuesInContext);
-        } else {
-            List<String> currentAttributeValues = user.getAttributes().get(attribute);
-            if (attributeValuesInContext == null) {
-                // attribute no longer sent by brokered idp, remove it
-                user.removeAttribute(attribute);
-            } else if (currentAttributeValues == null) {
-                // new attribute sent by brokered idp, add it
-                user.setAttribute(attribute, attributeValuesInContext);
-            } else if (!CollectionUtil.collectionEquals(attributeValuesInContext, currentAttributeValues)) {
-                // attribute sent by brokered idp has different values as before, update it
-                user.setAttribute(attribute, attributeValuesInContext);
-            }
-            // attribute already set
+        if (!attributeValuesInContext.isEmpty()) {
+            user.setAttribute(attribute, attributeValuesInContext);
         }
     }
 

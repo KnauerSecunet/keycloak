@@ -17,8 +17,10 @@
 package org.keycloak.saml.processing.core.parsers.saml.assertion;
 
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
 import javax.xml.stream.XMLEventFactory;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.events.Namespace;
@@ -51,6 +53,8 @@ public class SAMLAttributeValueParser implements StaxParser {
     private static final SAMLAttributeValueParser INSTANCE = new SAMLAttributeValueParser();
     private static final QName NIL = new QName(JBossSAMLURIConstants.XSI_NSURI.get(), "nil", JBossSAMLURIConstants.XSI_PREFIX.get());
     private static final QName XSI_TYPE = new QName(JBossSAMLURIConstants.XSI_NSURI.get(), "type", JBossSAMLURIConstants.XSI_PREFIX.get());
+
+    private static final ThreadLocal<XMLEventFactory> XML_EVENT_FACTORY = ThreadLocal.withInitial(XMLEventFactory::newInstance);
 
     public static SAMLAttributeValueParser getInstance() {
         return INSTANCE;
@@ -119,17 +123,17 @@ public class SAMLAttributeValueParser implements StaxParser {
             if (xmlEventReader.peek().isStartElement()) {
                 StringWriter sw = new StringWriter();
                 XMLEventWriter writer = XMLOutputFactory.newInstance().createXMLEventWriter(sw);
-                Deque<String> definedPrefixes = new LinkedList<>();
+                Deque<Map<String, String>> definedNamespaces = new LinkedList<>();
                 int tagLevel = 0;
                 while (xmlEventReader.hasNext() && (tagLevel > 0 || !xmlEventReader.peek().isEndElement())) {
                     XMLEvent event = (XMLEvent) xmlEventReader.next();
                     writer.add(event);
                     if (event.isStartElement()) {
-                        definedPrefixes.push(addNamespaceWhenMissing(definedPrefixes, writer, event.asStartElement()));
+                        definedNamespaces.push(addNamespaceWhenMissing(definedNamespaces, writer, event.asStartElement()));
                         tagLevel++;
                     }
                     if (event.isEndElement()) {
-                        definedPrefixes.pop();
+                        definedNamespaces.pop();
                         tagLevel--;
                     }
                 }
@@ -143,27 +147,38 @@ public class SAMLAttributeValueParser implements StaxParser {
         }
     }
 
-    private static String addNamespaceWhenMissing(Deque<String> definedPrefixes, XMLEventWriter writer, StartElement startElement)
-            throws XMLStreamException {
+    private static Map<String, String> addNamespaceWhenMissing(Deque<Map<String, String>> definedNamespaces, XMLEventWriter writer,
+            StartElement startElement) throws XMLStreamException {
 
-        if (startElement.getName().getPrefix() != null && !startElement.getName().getPrefix().isEmpty()
-                && !definedPrefixes.contains(startElement.getName().getPrefix())) {
-
-            Iterator<Namespace> namespaces = startElement.getNamespaces();
-            boolean hasNamespace = false;
-            while (namespaces.hasNext()) {
-                Namespace namespace = namespaces.next();
-                if (namespace.getNamespaceURI().equals(startElement.getName().getNamespaceURI())) {
-                    hasNamespace = true;
-                    break;
-                }
-            }
-            if (!hasNamespace) {
-                XMLEventFactory xmlEventFactory = XMLEventFactory.newInstance();
-                writer.add(xmlEventFactory.createNamespace(startElement.getName().getPrefix(), startElement.getName().getNamespaceURI()));
-                return startElement.getName().getPrefix();
+        final Map<String, String> necessaryNamespaces = new HashMap<>();
+        // Namespace in tag
+        if (startElement.getName().getPrefix() != null && !startElement.getName().getPrefix().isEmpty()) {
+            necessaryNamespaces.put(startElement.getName().getPrefix(), startElement.getName().getNamespaceURI());
+        }
+        // Namespaces in attributes
+        final Iterator<Attribute> attributes = startElement.getAttributes();
+        while (attributes.hasNext()) {
+            final Attribute attribute = attributes.next();
+            if (attribute.getName().getPrefix() != null && !attribute.getName().getPrefix().isEmpty()) {
+                necessaryNamespaces.put(attribute.getName().getPrefix(), attribute.getName().getNamespaceURI());
             }
         }
-        return "";
+
+        // Already contained in stack
+        necessaryNamespaces.entrySet().removeIf(nn -> definedNamespaces.stream().anyMatch(dn -> dn.containsKey(nn.getKey())));
+        // Contained in current element
+        Iterator<Namespace> namespaces = startElement.getNamespaces();
+        while (namespaces.hasNext() && !necessaryNamespaces.isEmpty()) {
+            necessaryNamespaces.remove(namespaces.next().getPrefix());
+        }
+
+        // Add all remaining necessaryNamespaces
+        if (!necessaryNamespaces.isEmpty()) {
+            XMLEventFactory xmlEventFactory = XML_EVENT_FACTORY.get();
+            for (Map.Entry<String, String> entry : necessaryNamespaces.entrySet()) {
+                writer.add(xmlEventFactory.createNamespace(entry.getKey(), entry.getValue()));
+            }
+        }
+        return necessaryNamespaces;
     }
 }
